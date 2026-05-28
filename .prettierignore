@@ -1,0 +1,6 @@
+dist
+node_modules
+public/api
+_api_samples
+_design
+*.log
