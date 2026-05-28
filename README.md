@@ -70,7 +70,7 @@ React Router v6 with two routes:
 |---|---|
 | Animations | `framer-motion` on `NameDetail` (layout + fade-in) |
 | Error boundaries | Root and shell boundaries in `App.tsx` + `AppShell.tsx` |
-| Virtualized list | `src/features/names/NameList.tsx` |
+| Virtualized list | `src/features/names/NamesColumn.tsx` (`react-window` FixedSizeList) |
 | Accessibility | Semantic radio group on gender, `aria-pressed` on chips/letter strip, `role="alert"` on empty/error states, focus-visible rings, sanitized HTML |
 | Linting | ESLint + `eslint-plugin-jsx-a11y` (zero-warnings policy) |
 | Formatting | Prettier with shared config |

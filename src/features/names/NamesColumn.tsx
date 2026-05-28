@@ -1,4 +1,5 @@
-import { useEffect, useRef } from 'react';
+import { forwardRef, useEffect, useRef } from 'react';
+import { FixedSizeList, type ListChildComponentProps } from 'react-window';
 import type { PetName } from '@/types/domain';
 
 interface Props {
@@ -9,63 +10,146 @@ interface Props {
   arrowsSide?: 'left' | 'right';
 }
 
+interface ItemData {
+  names: PetName[];
+  previewIndex: number;
+  previewId: string | null;
+  onItemClick: (id: string) => void;
+}
+
 const ITEM_HEIGHT = 92;
 const VISIBLE_HEIGHT = 552;
 const VERTICAL_PADDING = VISIBLE_HEIGHT / 2 - ITEM_HEIGHT / 2;
+const MASK_GRADIENT =
+  'linear-gradient(to bottom, transparent 0%, black 18%, black 82%, transparent 100%)';
 
-export function NamesColumn({ names, previewId, onPreviewChange, onConfirm, arrowsSide = 'right' }: Props) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const itemRefs = useRef<Map<string, HTMLLIElement | null>>(new Map());
+const OuterElement = forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+  function OuterElement({ style, ...rest }, ref) {
+    return (
+      <div
+        ref={ref}
+        role="listbox"
+        aria-label="Pet names"
+        {...rest}
+        style={{
+          ...style,
+          scrollbarWidth: 'none',
+          scrollSnapType: 'y mandatory',
+          maskImage: MASK_GRADIENT,
+          WebkitMaskImage: MASK_GRADIENT,
+        }}
+      />
+    );
+  },
+);
+
+const InnerElement = forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+  function InnerElement({ style, ...rest }, ref) {
+    const baseHeight = parseFloat(String((style as React.CSSProperties)?.height ?? '0'));
+    return (
+      <div
+        ref={ref}
+        {...rest}
+        style={{
+          ...style,
+          height: `${baseHeight + VERTICAL_PADDING * 2}px`,
+        }}
+      />
+    );
+  },
+);
+
+function Row({ index, style, data }: ListChildComponentProps<ItemData>) {
+  const { names, previewIndex, previewId, onItemClick } = data;
+  const n = names[index];
+  const distance = previewIndex < 0 ? index : Math.abs(index - previewIndex);
+  const isCenter = n.id === previewId;
+  const opacity = isCenter ? 1 : Math.max(0.18, 1 - distance * 0.32);
+  const scale = isCenter ? 1 : Math.max(0.7, 1 - distance * 0.1);
+  const top = parseFloat(String(style.top ?? '0')) + VERTICAL_PADDING;
+  return (
+    <div
+      style={{
+        ...style,
+        top,
+        scrollSnapAlign: 'center',
+        scrollSnapStop: 'always',
+      }}
+      className="flex w-full items-center justify-center"
+    >
+      <button
+        type="button"
+        role="option"
+        aria-selected={isCenter}
+        onClick={() => onItemClick(n.id)}
+        className={[
+          'block w-full whitespace-nowrap text-center font-slab leading-none transition-[opacity,transform,color,font-size] duration-300 ease-out',
+          isCenter
+            ? 'font-normal text-red-brand'
+            : 'font-light text-ink hover:opacity-90',
+        ].join(' ')}
+        style={{
+          fontSize: isCenter ? 80 : 60,
+          opacity,
+          transform: `scale(${scale})`,
+          transformOrigin: 'center',
+        }}
+      >
+        {n.title}
+      </button>
+    </div>
+  );
+}
+
+export function NamesColumn({
+  names,
+  previewId,
+  onPreviewChange,
+  onConfirm,
+  arrowsSide = 'right',
+}: Props) {
+  const listRef = useRef<FixedSizeList>(null);
   const settleTimer = useRef<number | undefined>(undefined);
   const programmaticScroll = useRef(false);
 
   const previewIndex = previewId ? names.findIndex((n) => n.id === previewId) : -1;
 
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container || !previewId) return;
-    const el = itemRefs.current.get(previewId);
-    if (!el) return;
-    const target = el.offsetTop + el.clientHeight / 2 - container.clientHeight / 2;
-    if (Math.abs(container.scrollTop - target) < 2) return;
+    if (!listRef.current || previewIndex < 0) return;
     programmaticScroll.current = true;
-    container.scrollTo({ top: target, behavior: 'smooth' });
-    window.setTimeout(() => {
+    listRef.current.scrollTo(previewIndex * ITEM_HEIGHT);
+    const timer = window.setTimeout(() => {
       programmaticScroll.current = false;
     }, 400);
-  }, [previewId, names]);
+    return () => window.clearTimeout(timer);
+  }, [previewIndex]);
 
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    function onScroll() {
-      if (programmaticScroll.current) return;
-      if (settleTimer.current) window.clearTimeout(settleTimer.current);
-      settleTimer.current = window.setTimeout(() => {
-        if (!container) return;
-        const center = container.scrollTop + container.clientHeight / 2;
-        let nearestId: string | null = null;
-        let minDist = Infinity;
-        itemRefs.current.forEach((el, id) => {
-          if (!el) return;
-          const itemCenter = el.offsetTop + el.clientHeight / 2;
-          const d = Math.abs(itemCenter - center);
-          if (d < minDist) {
-            minDist = d;
-            nearestId = id;
-          }
-        });
-        if (nearestId && nearestId !== previewId) {
-          onPreviewChange(nearestId);
-        }
-      }, 90);
-    }
-    container.addEventListener('scroll', onScroll, { passive: true });
     return () => {
-      container.removeEventListener('scroll', onScroll);
       if (settleTimer.current) window.clearTimeout(settleTimer.current);
     };
-  }, [previewId, onPreviewChange, names]);
+  }, []);
+
+  function handleScroll({
+    scrollOffset,
+    scrollUpdateWasRequested,
+  }: {
+    scrollOffset: number;
+    scrollUpdateWasRequested: boolean;
+  }) {
+    if (scrollUpdateWasRequested || programmaticScroll.current) return;
+    if (settleTimer.current) window.clearTimeout(settleTimer.current);
+    settleTimer.current = window.setTimeout(() => {
+      const nearestIndex = Math.max(
+        0,
+        Math.min(names.length - 1, Math.round(scrollOffset / ITEM_HEIGHT)),
+      );
+      const nearestId = names[nearestIndex]?.id;
+      if (nearestId && nearestId !== previewId) {
+        onPreviewChange(nearestId);
+      }
+    }, 90);
+  }
 
   function advance(direction: 'prev' | 'next') {
     if (names.length === 0) return;
@@ -87,14 +171,20 @@ export function NamesColumn({ names, previewId, onPreviewChange, onConfirm, arro
 
   if (names.length === 0) {
     return (
-      <div className="flex w-full items-center justify-center text-center text-ink-mid" style={{ height: VISIBLE_HEIGHT }}>
+      <div
+        className="flex w-full items-center justify-center text-center text-ink-mid"
+        style={{ height: VISIBLE_HEIGHT }}
+      >
         <p className="font-slab text-[20px]">No names match your filters.</p>
       </div>
     );
   }
 
   const arrowsBlock = (
-    <div className="flex flex-col items-center justify-between py-3" style={{ height: VISIBLE_HEIGHT }}>
+    <div
+      className="flex flex-col items-center justify-between py-3"
+      style={{ height: VISIBLE_HEIGHT }}
+    >
       <button
         type="button"
         onClick={() => advance('prev')}
@@ -102,7 +192,12 @@ export function NamesColumn({ names, previewId, onPreviewChange, onConfirm, arro
         disabled={previewIndex <= 0}
         className="rounded-full p-1 transition-opacity hover:bg-red-brand/10 disabled:cursor-not-allowed disabled:opacity-30"
       >
-        <img src="/img/arrow-up.png" alt="" aria-hidden="true" className="h-10 w-10 object-contain md:h-12 md:w-12" />
+        <img
+          src="/img/arrow-up.png"
+          alt=""
+          aria-hidden="true"
+          className="h-10 w-10 object-contain md:h-12 md:w-12"
+        />
       </button>
       <button
         type="button"
@@ -111,7 +206,12 @@ export function NamesColumn({ names, previewId, onPreviewChange, onConfirm, arro
         disabled={previewIndex >= names.length - 1}
         className="rounded-full p-1 transition-opacity hover:bg-red-brand/10 disabled:cursor-not-allowed disabled:opacity-30"
       >
-        <img src="/img/arrow-down.png" alt="" aria-hidden="true" className="h-10 w-10 object-contain md:h-12 md:w-12" />
+        <img
+          src="/img/arrow-down.png"
+          alt=""
+          aria-hidden="true"
+          className="h-10 w-10 object-contain md:h-12 md:w-12"
+        />
       </button>
     </div>
   );
@@ -119,65 +219,22 @@ export function NamesColumn({ names, previewId, onPreviewChange, onConfirm, arro
   return (
     <div className="flex w-full items-stretch justify-center gap-1.5">
       {arrowsSide === 'left' && arrowsBlock}
-      <div
-        ref={containerRef}
-        role="listbox"
-        aria-label="Pet names"
-        className="relative w-full max-w-[520px] overflow-y-auto overflow-x-hidden"
-        style={{
-          height: VISIBLE_HEIGHT,
-          scrollbarWidth: 'none',
-          scrollSnapType: 'y mandatory',
-          maskImage:
-            'linear-gradient(to bottom, transparent 0%, black 18%, black 82%, transparent 100%)',
-          WebkitMaskImage:
-            'linear-gradient(to bottom, transparent 0%, black 18%, black 82%, transparent 100%)',
-        }}
-      >
-        <ul
-          className="flex flex-col items-stretch"
-          style={{ paddingTop: VERTICAL_PADDING, paddingBottom: VERTICAL_PADDING }}
+      <div className="w-full max-w-[520px]">
+        <FixedSizeList
+          ref={listRef}
+          height={VISIBLE_HEIGHT}
+          width="100%"
+          itemCount={names.length}
+          itemSize={ITEM_HEIGHT}
+          itemData={{ names, previewIndex, previewId, onItemClick: handleItemClick }}
+          outerElementType={OuterElement}
+          innerElementType={InnerElement}
+          onScroll={handleScroll}
+          overscanCount={4}
         >
-          {names.map((n, i) => {
-            const distance = previewIndex < 0 ? i : Math.abs(i - previewIndex);
-            const isCenter = n.id === previewId;
-            const opacity = isCenter ? 1 : Math.max(0.18, 1 - distance * 0.32);
-            const scale = isCenter ? 1 : Math.max(0.7, 1 - distance * 0.1);
-            return (
-              <li
-                key={n.id}
-                ref={(el) => {
-                  itemRefs.current.set(n.id, el);
-                }}
-                className="flex w-full items-center justify-center"
-                style={{ height: ITEM_HEIGHT, scrollSnapAlign: 'center', scrollSnapStop: 'always' }}
-              >
-                <button
-                  type="button"
-                  role="option"
-                  aria-selected={isCenter}
-                  onClick={() => handleItemClick(n.id)}
-                  className={[
-                    'block w-full whitespace-nowrap text-center font-slab leading-none transition-[opacity,transform,color,font-size] duration-300 ease-out',
-                    isCenter
-                      ? 'font-normal text-red-brand'
-                      : 'font-light text-ink hover:opacity-90',
-                  ].join(' ')}
-                  style={{
-                    fontSize: isCenter ? 80 : 60,
-                    opacity,
-                    transform: `scale(${scale})`,
-                    transformOrigin: 'center',
-                  }}
-                >
-                  {n.title}
-                </button>
-              </li>
-            );
-          })}
-        </ul>
+          {Row}
+        </FixedSizeList>
       </div>
-
       {arrowsSide === 'right' && arrowsBlock}
     </div>
   );
